@@ -1,8 +1,8 @@
 {
   "$schema": "https://www.raycast.com/schemas/extension.json",
   "name": "browser-profile-switcher",
-  "title": "Chrome Profile Switcher",
-  "description": "Quickly cycle between Chrome browser profiles with a keyboard shortcut",
+  "title": "Browser Profile Switcher",
+  "description": "Quickly cycle between browser profiles for your default Chromium browser (Chrome, Edge, Brave, Arc, Vivaldi, Opera)",
   "icon": "extension-icon.png",
   "author": "sajad",
   "platforms": [
@@ -12,8 +12,8 @@
   "commands": [
     {
       "name": "switch-to",
-      "title": "Switch Chrome Profile",
-      "description": "Cycle between your Chrome browser profiles",
+      "title": "Switch Browser Profile",
+      "description": "Cycle between your browser profiles",
       "mode": "no-view"
     }
   ],
