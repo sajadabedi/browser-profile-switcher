@@ -1,28 +1,29 @@
-import { showHUD } from "@raycast/api";
+import { getPreferenceValues, showHUD } from "@raycast/api";
 import { execSync } from "child_process";
 
-// Map of Chromium browser bundle IDs to their application names
-const CHROMIUM_BROWSERS: Record<string, string> = {
+interface Preferences {
+  defaultBrowser: string;
+  showToastMessages: boolean;
+}
+
+// Map of supported browser bundle IDs to their application names
+const SUPPORTED_BROWSERS: Record<string, string> = {
   "com.google.chrome": "Google Chrome",
-  "com.google.chrome.canary": "Google Chrome Canary",
   "com.microsoft.edgemac": "Microsoft Edge",
-  "com.microsoft.edgemac.beta": "Microsoft Edge Beta",
-  "com.microsoft.edgemac.dev": "Microsoft Edge Dev",
   "com.brave.browser": "Brave Browser",
-  "com.brave.browser.beta": "Brave Browser Beta",
-  "com.brave.browser.nightly": "Brave Browser Nightly",
   "com.vivaldi.vivaldi": "Vivaldi",
   "com.operasoftware.opera": "Opera",
   "org.chromium.chromium": "Chromium",
+  "com.apple.safari": "Safari",
 };
 
-const DEFAULT_BROWSER = "Google Chrome";
+const FALLBACK_BROWSER = "Google Chrome";
 
 /**
- * Gets the default browser's application name if it's a Chromium-based browser.
+ * Auto-detects the default browser's application name.
  * Falls back to Google Chrome if no supported browser is detected.
  */
-const getDefaultBrowser = (): string => {
+const autoDetectBrowser = (): string => {
   try {
     // Get the default browser bundle ID using macOS defaults command
     const bundleId = execSync(
@@ -30,8 +31,8 @@ const getDefaultBrowser = (): string => {
       { encoding: "utf-8", timeout: 2000 },
     ).trim();
 
-    if (bundleId && CHROMIUM_BROWSERS[bundleId.toLowerCase()]) {
-      return CHROMIUM_BROWSERS[bundleId.toLowerCase()];
+    if (bundleId && SUPPORTED_BROWSERS[bundleId.toLowerCase()]) {
+      return SUPPORTED_BROWSERS[bundleId.toLowerCase()];
     }
 
     // Fallback: try alternative method using URL scheme
@@ -40,59 +41,81 @@ const getDefaultBrowser = (): string => {
       { encoding: "utf-8", timeout: 2000 },
     ).trim();
 
-    if (altBundleId && CHROMIUM_BROWSERS[altBundleId.toLowerCase()]) {
-      return CHROMIUM_BROWSERS[altBundleId.toLowerCase()];
+    if (altBundleId && SUPPORTED_BROWSERS[altBundleId.toLowerCase()]) {
+      return SUPPORTED_BROWSERS[altBundleId.toLowerCase()];
     }
 
-    return DEFAULT_BROWSER;
+    return FALLBACK_BROWSER;
   } catch {
-    return DEFAULT_BROWSER;
+    return FALLBACK_BROWSER;
   }
+};
+
+/**
+ * Gets the browser to use based on user preferences.
+ * If set to "auto", detects the system default browser.
+ */
+const getBrowser = (preferences: Preferences): string => {
+  if (preferences.defaultBrowser === "auto") {
+    return autoDetectBrowser();
+  }
+  return preferences.defaultBrowser;
 };
 
 interface CycleResult {
   success: boolean;
   browserName: string;
-  single?: boolean;
+  action?: "switched" | "launched" | "new_window" | "single";
 }
 
 /**
  * Uses JXA to cycle to the next browser window.
- * Takes the last window and brings it to the front.
+ * If browser is not running, launches it.
+ * If no windows exist, opens a new window.
+ * Otherwise, takes the last window and brings it to the front.
  */
 const cycleToNextWindow = (browserName: string): CycleResult => {
   const jxaScript = `
     (() => {
       const browser = Application("${browserName}");
+      const SystemEvents = Application("System Events");
 
+      // Check if browser is running
       if (!browser.running()) {
-        return JSON.stringify({ success: false, error: "not running" });
+        browser.activate();
+        return JSON.stringify({ success: true, action: "launched" });
       }
 
       const windows = browser.windows();
 
+      // No windows open - create a new one
       if (windows.length === 0) {
-        return JSON.stringify({ success: false, error: "no windows" });
+        browser.activate();
+        // Use System Events to send Cmd+N for new window
+        delay(0.3);
+        SystemEvents.keystroke("n", { using: "command down" });
+        return JSON.stringify({ success: true, action: "new_window" });
       }
 
+      // Only one window - just activate it
       if (windows.length === 1) {
         browser.activate();
-        return JSON.stringify({ success: true, single: true });
+        return JSON.stringify({ success: true, action: "single" });
       }
 
-      // Get the last window and bring it to front by setting its index to 1
+      // Multiple windows - cycle to next
       const lastWindow = windows[windows.length - 1];
       lastWindow.index = 1;
       browser.activate();
 
-      return JSON.stringify({ success: true });
+      return JSON.stringify({ success: true, action: "switched" });
     })()
   `;
 
   try {
     const result = execSync(`osascript -l JavaScript -e '${jxaScript}'`, {
       encoding: "utf-8",
-      timeout: 3000,
+      timeout: 5000,
     }).trim();
 
     const parsed = JSON.parse(result);
@@ -103,19 +126,26 @@ const cycleToNextWindow = (browserName: string): CycleResult => {
 };
 
 export default async function Command() {
-  // Detect default browser (falls back to Chrome if not a supported Chromium browser)
-  const browserName = getDefaultBrowser();
+  const preferences = getPreferenceValues<Preferences>();
+  const browserName = getBrowser(preferences);
   const result = cycleToNextWindow(browserName);
 
+  if (!preferences.showToastMessages) {
+    return;
+  }
+
   if (!result.success) {
-    await showHUD(`${browserName} is not running or has no windows`);
+    await showHUD(`Failed to control ${browserName}`);
     return;
   }
 
-  if (result.single) {
-    await showHUD(`Only one ${browserName} window open`);
-    return;
-  }
+  const messages: Record<string, string> = {
+    launched: `Launched ${browserName}`,
+    new_window: `Opened new ${browserName} window`,
+    single: `Only one ${browserName} window open`,
+    switched: `Switched profile`,
+  };
 
-  await showHUD(`Switched profile`);
+  const message = result.action ? messages[result.action] : "Switched profile";
+  await showHUD(message);
 }
